@@ -2,8 +2,8 @@ name: Scan quotidien des offres
 
 on:
   schedule:
-    # 05:30 UTC ≈ tôt le matin en Afrique de l'Ouest/Centrale (ajustez selon votre fuseau)
-    - cron: "30 5 * * *"
+    # Toutes les heures, 24h/24 — couvre tous les fuseaux horaires
+    - cron: "0 * * * *"
   workflow_dispatch: {}  # permet de lancer le scan manuellement depuis l'onglet Actions
 
 jobs:
