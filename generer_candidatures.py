@@ -63,8 +63,14 @@ SCHEMA_REPONSE = {
         "resume_fr": {"type": "string"},
         "cv_texte": {"type": "string"},
         "lettre_texte": {"type": "string"},
+        "anglais_professionnel_requis": {"type": "boolean"},
+        "remote_restreint_pays": {"type": "boolean"},
+        "raison_restriction": {"type": "string"},
     },
-    "required": ["score", "langue_offre", "resume_fr", "cv_texte", "lettre_texte"],
+    "required": [
+        "score", "langue_offre", "resume_fr", "cv_texte", "lettre_texte",
+        "anglais_professionnel_requis", "remote_restreint_pays", "raison_restriction",
+    ],
 }
 
 
@@ -92,7 +98,17 @@ def analyser_offre(offre: dict, profil: dict) -> dict:
         "cv_texte (a short ATS-friendly CV tailored to this offer, plain "
         "text, in the SAME language as the offer), lettre_texte (a short "
         "cover letter, max 200 words, plain text, in the SAME language as "
-        "the offer, professional tone)."
+        "the offer, professional tone), anglais_professionnel_requis "
+        "(boolean: true ONLY if the offer explicitly requires professional, "
+        "fluent, advanced, or native English proficiency — false if English "
+        "is not mentioned, only 'basic English' is asked, or the offer is "
+        "in French with no English requirement), remote_restreint_pays "
+        "(boolean: true if the offer says 'remote' but actually restricts "
+        "candidates to specific countries/regions, such as 'must be based "
+        "in the US', 'EU residents only', 'UK work authorization required' "
+        "— false if remote is open worldwide or the location is not "
+        "restrictive), raison_restriction (short French sentence explaining "
+        "which restriction applies, or empty string if none)."
     )
     prompt_utilisateur = (
         f"CANDIDATE PROFILE:\n"
@@ -131,11 +147,21 @@ def analyser_offre(offre: dict, profil: dict) -> dict:
 
 def mettre_a_jour_offre(offre_id: str, resultat: dict):
     score = resultat.get("score", 0)
-    nouveau_statut = "pret" if score >= SCORE_MINIMUM else "rejete"
+    anglais_bloquant = resultat.get("anglais_professionnel_requis", False)
+    remote_bloquant = resultat.get("remote_restreint_pays", False)
+
+    if anglais_bloquant or remote_bloquant:
+        nouveau_statut = "rejete"
+        raison = resultat.get("raison_restriction", "")
+        resume = f"[Écartée automatiquement — {raison}] " + (resultat.get("resume_fr") or "")
+    else:
+        nouveau_statut = "pret" if score >= SCORE_MINIMUM else "rejete"
+        resume = resultat.get("resume_fr")
+
     payload = {
         "score": score,
         "langue_offre": resultat.get("langue_offre"),
-        "resume_fr": resultat.get("resume_fr"),
+        "resume_fr": resume,
         "cv_genere": resultat.get("cv_texte"),
         "lettre_generee": resultat.get("lettre_texte"),
         "statut": nouveau_statut,
@@ -161,19 +187,29 @@ def recuperer_offres_pretes_non_notifiees() -> list[dict]:
 def construire_email_html(offres: list[dict]) -> str:
     blocs = []
     for o in offres:
+        cv = (o.get('cv_genere') or '(non généré)').replace('\n', '<br>')
+        lettre = (o.get('lettre_generee') or '(non générée)').replace('\n', '<br>')
         blocs.append(f"""
-        <div style="margin-bottom:24px;padding:16px;border:1px solid #ddd;border-radius:8px;">
+        <div style="margin-bottom:32px;padding:16px;border:1px solid #ddd;border-radius:8px;">
             <h3 style="margin:0 0 8px;">{o.get('titre','')} — {o.get('entreprise','')}</h3>
             <p><b>Score de compatibilité :</b> {o.get('score','?')}/100</p>
             <p><b>Résumé :</b> {o.get('resume_fr','')}</p>
-            <p><a href="{o.get('lien','')}">Voir et postuler à l'offre</a></p>
+            <p><a href="{o.get('lien','')}">→ Voir et postuler à l'offre</a></p>
+            <details style="margin-top:10px;">
+                <summary style="cursor:pointer;font-weight:bold;">Voir le CV proposé (cliquer pour ouvrir)</summary>
+                <div style="background:#f7f7f7;padding:10px;border-radius:6px;margin-top:6px;font-size:13px;">{cv}</div>
+            </details>
+            <details style="margin-top:10px;">
+                <summary style="cursor:pointer;font-weight:bold;">Voir la lettre de motivation (cliquer pour ouvrir)</summary>
+                <div style="background:#f7f7f7;padding:10px;border-radius:6px;margin-top:6px;font-size:13px;">{lettre}</div>
+            </details>
         </div>
         """)
     return f"""
     <html><body>
     <h2>Vos {len(offres)} candidatures prêtes aujourd'hui</h2>
+    <p>Pour chaque offre : cliquez sur "Voir le CV proposé" et "Voir la lettre de motivation" pour les déplier, copiez le texte, collez-le dans le formulaire de candidature.</p>
     {''.join(blocs)}
-    <p style="color:#888;font-size:12px;">Les CV et lettres complets sont dans votre table Supabase (colonnes cv_genere / lettre_generee).</p>
     </body></html>
     """
 
