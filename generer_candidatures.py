@@ -55,19 +55,36 @@ def recuperer_offres_a_traiter() -> list[dict]:
     return r.json()
 
 
-def extraire_json(texte: str) -> dict:
-    """Le modèle peut entourer le JSON de texte ou de balises ```."""
-    texte = texte.strip()
-    m = re.search(r"\{.*\}", texte, re.DOTALL)
-    if not m:
-        raise ValueError("Pas de JSON trouvé dans la réponse du modèle.")
-    return json.loads(m.group(0))
+SCHEMA_REPONSE = {
+    "type": "object",
+    "properties": {
+        "score": {"type": "integer"},
+        "langue_offre": {"type": "string"},
+        "resume_fr": {"type": "string"},
+        "cv_texte": {"type": "string"},
+        "lettre_texte": {"type": "string"},
+    },
+    "required": ["score", "langue_offre", "resume_fr", "cv_texte", "lettre_texte"],
+}
+
+
+def extraire_json(brut) -> dict:
+    """Cloudflare renvoie parfois déjà un objet (mode JSON), parfois du
+    texte à parser — on gère les deux cas."""
+    if isinstance(brut, dict):
+        return brut
+    if isinstance(brut, str):
+        texte = brut.strip()
+        m = re.search(r"\{.*\}", texte, re.DOTALL)
+        if not m:
+            raise ValueError("Pas de JSON trouvé dans la réponse du modèle.")
+        return json.loads(m.group(0))
+    raise ValueError(f"Type de réponse inattendu: {type(brut)}")
 
 
 def analyser_offre(offre: dict, profil: dict) -> dict:
     prompt_systeme = (
-        "You are a career assistant. You MUST answer with ONLY a valid JSON "
-        "object, no extra text, no markdown fences. Fields required: "
+        "You are a career assistant. Fields: "
         "score (integer 0-100, how well the candidate profile matches this "
         "job offer), langue_offre (ISO code of the offer's language, e.g. "
         "'fr' or 'en'), resume_fr (a 2-sentence summary of the offer, "
@@ -88,22 +105,28 @@ def analyser_offre(offre: dict, profil: dict) -> dict:
         f"JOB OFFER:\n"
         f"Title: {offre.get('titre')}\n"
         f"Company: {offre.get('entreprise')}\n"
-        f"Description: {(offre.get('description') or '')[:1500]}\n\n"
-        f"Respond with ONLY the JSON object described in the system message."
+        f"Description: {(offre.get('description') or '')[:1500]}\n"
     )
     resp = requests.post(
         CF_MODEL_URL,
         headers=HEADERS_CF,
-        json={"messages": [
-            {"role": "system", "content": prompt_systeme},
-            {"role": "user", "content": prompt_utilisateur},
-        ]},
+        json={
+            "messages": [
+                {"role": "system", "content": prompt_systeme},
+                {"role": "user", "content": prompt_utilisateur},
+            ],
+            "max_tokens": 1200,
+            "response_format": {
+                "type": "json_schema",
+                "json_schema": SCHEMA_REPONSE,
+            },
+        },
         timeout=60,
     )
     resp.raise_for_status()
     data = resp.json()
-    texte_brut = data.get("result", {}).get("response", "")
-    return extraire_json(texte_brut)
+    brut = data.get("result", {}).get("response", "")
+    return extraire_json(brut)
 
 
 def mettre_a_jour_offre(offre_id: str, resultat: dict):
